@@ -1,0 +1,263 @@
+#!/bin/bash
+# Plesk to Hestia Migration Script - Revised
+# Version 4.0
+
+# Configuration
+SSHPORT=22
+PANEL=hestia
+PANELBIN="/usr/local/${PANEL}/bin/"
+MIGRATION_LOG="/var/log/plesk_to_hestia_migration.log"
+
+# Color Codes
+GREEN=$(tput setaf 2)
+RED=$(tput setaf 1)
+YELLOW=$(tput setaf 3)
+COLOROFF=$(tput sgr0)
+
+# Log Messages
+log_message() {
+    local level=$1
+    local message=$2
+    echo "[$(date +'%Y-%m-%d %H:%M:%S')] [$level] $message" | tee -a "$MIGRATION_LOG"
+}
+
+# Generate Random Password
+generate_password() {
+    tr -dc 'A-Za-z0-9@#$%^&+=' < /dev/urandom | head -c 16
+}
+
+# Normalize Username
+normalize_username() {
+    echo "$1" | tr -cd '[:alnum:]' | cut -c1-8
+}
+
+# Get Plesk Package and Map to Hestia
+get_hestia_package() {
+    local domain=$1
+    local plesk_plan=$(plesk bin domain -i $domain | grep 'subscribed to the service plan' | awk -F'"' '{print $2}')
+    echo "$plesk_plan"
+}
+
+# Extract Subscription Details
+get_subscription_details() {
+    local domain=$1
+    if ! plesk bin subscription --list | grep -qw "$domain"; then
+        log_message "ERROR" "Subscription $domain not found."
+        exit 1
+    fi
+
+    local details=$(plesk bin subscription --info "$domain")
+    local www_root=$(echo "$details" | awk '$1 == "--WWW-Root--:" { print $2 }')
+    local email_count=$(echo "$details" | awk '$1 == "Mailboxes:" { print $2 }')
+    local databases_count=$(echo "$details" | grep -A2 Databases | awk '$1 == "Total" { print $3 }')
+    echo "$www_root|$email_count|$databases_count"
+}
+
+# Migrate Domain
+migrate_domain() {
+    local domain=$1
+    local target_ip=$2
+    local target_user=${3:-$(normalize_username "$domain")}
+    local subscription_details
+    IFS='|' read -r www_root email_count databases_count <<< "$(get_subscription_details "$domain")"
+    local hestia_package=$(get_hestia_package "$domain")
+    local owners_contact_name=$(plesk bin subscription --info $domain | grep "Owner's contact name" | awk -F': ' '{gsub(/^[ \t]+|[ \t]+$/, "", $2); print $2}' | sed 's/[^a-zA-Z0-9 ]//g' | awk '{print $1, $2}')
+    local user_password=$(generate_password)
+	
+	# Check if the user exists on Hestia
+    ssh -p "$SSHPORT" "root@$target_ip v-list-users" | grep -q "^$target_user$"
+    if [ $? -ne 0 ]; then
+        # Add User if not exists
+        log_message "INFO" "User $target_user does not exist. Adding user."
+         # Create user and set package
+    ssh -p "$SSHPORT" "root@$target_ip" << EOF
+${PANELBIN}v-add-user $target_user $user_password admin@$domain
+${PANELBIN}v-change-user-package $target_user $hestia_package
+${PANELBIN}v-add-domain $target_user $domain
+EOF
+    else
+        log_message "INFO" "User $target_user already exists. Skipping user creation."
+    fi
+    # Add Domain
+    log_message "INFO" "Adding $domain to Hestia for user $target_user."
+    ssh -p "$SSHPORT" "root@$target_ip" "v-add-domain $target_user $domain"
+    log_message "INFO" "Domain $domain added to Hestia account $target_user."
+
+    # Migrate components
+    migrate_files "$www_root" "$target_user" "$domain" "$target_ip"
+    [[ $databases_count -gt 0 ]] && migrate_databases "$domain" "$target_user" "$target_ip"
+    [[ $email_count -gt 0 ]] && migrate_emails "$domain" "$target_user" "$target_ip"
+
+    log_message "SUCCESS" "Migration of $domain completed successfully."
+}
+
+# Migrate Emails
+migrate_emails() {
+    local domain=$1
+    local target_user=$2
+    local target_ip=$3
+    
+    # Get all email accounts for the specific domain
+    local emails=$(plesk bin mail -l | awk -v DOMAIN="$domain" '$3 ~ "@"DOMAIN { print $3 }')
+
+    if [[ -z "$emails" ]]; then
+        log_message "WARNING" "No email accounts found for domain $domain"
+        return 0
+    fi
+
+    for email in $emails; do
+        local local_part=$(echo "$email" | cut -d'@' -f1)
+        
+        # Retrieve email password securely
+        local email_pass=$(plesk bin mail -i "$email" | grep "Password:" | awk '{ print $2 }')
+        
+        if [[ -z "$email_pass" ]]; then
+            log_message "ERROR" "Could not retrieve password for $email"
+            continue
+        fi
+
+        # Verify email account creation
+        ssh -p "$SSHPORT" "root@$target_ip" bash << EOF
+# Explicitly create mail account with specific parameters
+${PANELBIN}v-add-mail-account "$target_user" "$domain" "$local_part" "$email_pass" 
+
+# Verify account creation
+if [[ \$? -ne 0 ]]; then
+    echo "Failed to create email account $email"
+    exit 1
+fi
+EOF
+        # Check SSH command exit status
+        if [[ $? -eq 0 ]]; then
+            # Migrate mailbox contents
+            rsync -avz "/var/qmail/mailnames/$domain/$local_part/Maildir/" \
+                "root@$target_ip:/home/$target_user/mail/$domain/$local_part/"
+				
+				# Verify email account creation
+        ssh -p "$SSHPORT" "root@$target_ip" bash << EOF		
+		chown -R $target_user:mail /home/$target_user/mail/$domain
+        chmod 750 /home/$target_user/mail/$domain/
+        find /home/$target_user/mail/$domain/ -type d -exec chmod 750 {} \;
+        find /home/$target_user/mail/$domain/ -type f -exec chmod 640 {} \;
+        systemctl restart dovecot
+        doveadm index -u $email INBOX
+EOF
+            
+            log_message "SUCCESS" "Email account $email successfully migrated and registered in Hestia"
+        else
+            log_message "ERROR" "Failed to register email account $email in Hestia"
+        fi
+    done
+}
+
+# Migrate Website Files
+migrate_files() {
+    local source_path=$1
+    local target_user=$2
+    local domain=$3
+    local target_ip=$4
+
+    # Check if source_path exists and is valid
+    if [[ ! -d "$source_path" ]]; then
+        echo "Source path $source_path is invalid or does not exist. Falling back to /home/$domain."
+        source_path="/home/$domain"
+    fi
+
+    # Verify if Plesk subscription exists
+    if ! ssh -p "$SSHPORT" "root@$target_ip" plesk bin subscription --info "$domain" > /dev/null 2>&1; then
+        echo "Plesk subscription for $domain does not exist. Falling back to /home/$domain."
+        source_path="/home/$domain"
+    fi
+
+    # Perform the file migration
+    rsync -avz -e "ssh -p $SSHPORT" "$source_path/" "root@$target_ip:/home/$target_user/web/$domain/public_html/"
+
+    ssh -p "$SSHPORT" "root@$target_ip" bash << EOF
+        chown -R $target_user:$target_user /home/$target_user/web/
+EOF
+
+    check_status $? "File migration for $domain failed."
+}
+
+
+# Migrate Databases
+# Database Migration Function
+migrate_databases() {
+    local domain="$1"
+    local target_user="$2"
+    local target_ip="$3"
+    
+    # Use mysql directly with proper database selection
+    local dbs_names=$(plesk db -N -B -e "SELECT db.name FROM data_bases db JOIN db_users dbu ON db.id = dbu.db_id LEFT JOIN domains d ON db.dom_id = d.id WHERE d.name='$domain'")
+   
+    if [[ -z "$dbs_names" ]]; then
+        log_message "WARNING" "No databases found for domain $domain"
+        return 0
+    fi
+
+   for db in $dbs_names; do
+    # Skip empty or invalid database names
+    [[ -z "$db" ]] && continue
+
+    # Get precise database user
+    local db_user=$(plesk db -N -B -e "SELECT user FROM mysql.db WHERE db='$db' LIMIT 1")
+    
+    # Extract hashed password using INFORMATION_SCHEMA (adjust based on MySQL/MariaDB version)
+    local db_pass=$(plesk db -N -B -e "SELECT authentication_string FROM mysql.user WHERE user='$db_user' LIMIT 1")
+    
+    # Validate database credentials
+    if [[ -z "$db_user" || -z "$db_pass" ]]; then
+        log_message "ERROR" "Could not retrieve credentials for database $db"
+        continue
+    fi
+
+    # Clean up database and username to remove the Plesk-specific prefix (ur5cdx_)
+    local new_db="${db#${target_user}_}"  # Remove the target user prefix (e.g., ur5cdx_)
+    local new_db_user="${db_user#${target_user}_}"  # Remove the target user prefix (e.g., ur5cdx_)
+    
+    local temp_pass="temporary_password"  # Set a temporary password for migration
+
+    # Dump database with enhanced safety
+    local dump_file="/tmp/${db}_migration.sql"
+    mysqldump --single-transaction --quick --lock-tables=false "$db" > "$dump_file" || {
+        log_message "ERROR" "Failed to dump database $db"
+        continue
+    }
+
+    # Transfer and restore database
+    scp -P "$SSHPORT" "$dump_file" "root@$target_ip:/root/" || {
+        log_message "ERROR" "Failed to transfer database dump for $db"
+        rm "$dump_file"
+        continue
+    }
+
+    # Execute database restoration and password update
+    ssh -p "$SSHPORT" "root@$target_ip" bash << EOF
+${PANELBIN}v-add-database "$target_user" "$new_db" "$new_db_user" "$temp_pass"
+/usr/bin/mariadb "$target_user"_"$new_db" < "/root/${db}_migration.sql"
+# Update the password directly with the encrypted password from Plesk
+echo "SET PASSWORD FOR '${target_user}_${new_db_user}'@'localhost' = '$db_pass'; FLUSH PRIVILEGES;" | /usr/bin/mariadb
+rm "/root/${db}_migration.sql"
+EOF
+ 
+
+    # Clean up local dump
+    rm "$dump_file"
+
+    # Log successful migration
+    log_message "INFO" "Database migrated: $db -> $new_db"
+done
+}
+
+
+# Main
+if [[ $# -lt 2 ]]; then
+    echo "Usage: $0 migrate DOMAIN.COM TARGET_IP [TARGET_USERNAME]"
+    exit 1
+fi
+
+case "$1" in
+    migrate) migrate_domain "$2" "$3" "$4" ;;
+    *) echo "Invalid command. Use 'migrate DOMAIN.COM TARGET_IP [TARGET_USERNAME]'."; exit 1 ;;
+esac
+exit 0
