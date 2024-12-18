@@ -40,7 +40,23 @@ Follow the steps below to successfully migrate accounts from Plesk to HestiaCP u
 
 ## How to Use  
 
-### Step 1: Set Up SSH Access  
+### Step 1: Ensure Hosting Plans Match  
+Before running the migration script, ensure that the corresponding hosting plan is pre-configured in HestiaCP. The plans on both servers must match in name and specifications.  
+
+### Example Comparison  
+-------------------------------------------------
+| **Plesk Server Plan** | **HestiaCP Plan**     |  
+|------------------------|----------------------|  
+| **Plan A**             | **Plan A**           |  
+| 5GB storage            | 5GB storage          |  
+| 5 domains              | 5 domains            |  
+| 500 Emails             | 500 Emails           |  
+| 200GB bandwidth        | 200GB bandwidth      |  
+| 50 MySQL databases     | 50 MySQL databases   |  
+-------------------------------------------------
+
+### Step 2: Set Up SSH Access  
+
 1. Generate an SSH key on the Plesk server:  
    ```bash
    ssh-keygen -t rsa -b 4096
@@ -58,7 +74,7 @@ Follow the steps below to successfully migrate accounts from Plesk to HestiaCP u
    ssh root@<HestiaCP-Server-IP-Address>
    ```  
 
-### Step 2: Download and Prepare the Script  
+### Step 3: Download and Prepare the Script  
 1. Download the migration script to the Plesk server.  
 2. Place the script in the '/root' directory or any preferred folder.  
 3. Set the appropriate execution permissions: 
@@ -67,7 +83,7 @@ Follow the steps below to successfully migrate accounts from Plesk to HestiaCP u
    chmod +x /root/plesk_to_hestia
    ```  
 
-### Step 3: Run the Migration Script  
+### Step 4: Run the Migration Script  
 Run the script using the following command: 
 
 ```bash
