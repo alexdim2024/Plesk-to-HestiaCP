@@ -34,10 +34,10 @@ Migrate email accounts associated with the hosting account.
 
 Follow the steps below to successfully migrate accounts from Plesk to HestiaCP using our script:  
 
-## Prerequisites  
+### Prerequisites  
 - Ensure that `rsync` is installed on your Plesk server.  
 
-## How to Use  
+<h2> How to Use </h2> 
 
 ### Step 1: Backup all the data
 Ensure that you have backed up all your data. While the script has been tested in a production environment, we do not accept any responsibility for its use or misuse.
@@ -45,7 +45,7 @@ Ensure that you have backed up all your data. While the script has been tested i
 ### Step 2: Ensure Hosting Plans Match  
 Before running the migration script, ensure that the corresponding hosting plan is pre-configured in HestiaCP. The plans on both servers must match in name and specifications.  
 
-### Example Comparison  
+### Example  
 -------------------------------------------------
 | **Plesk Server Plan** | **HestiaCP Plan**     |  
 |------------------------|----------------------|  
