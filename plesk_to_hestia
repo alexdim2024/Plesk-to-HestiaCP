@@ -8,12 +8,6 @@ PANEL=hestia
 PANELBIN="/usr/local/${PANEL}/bin/"
 MIGRATION_LOG="/var/log/plesk_to_hestia_migration.log"
 
-# Color Codes
-GREEN=$(tput setaf 2)
-RED=$(tput setaf 1)
-YELLOW=$(tput setaf 3)
-COLOROFF=$(tput sgr0)
-
 # Log Messages
 log_message() {
     local level=$1
