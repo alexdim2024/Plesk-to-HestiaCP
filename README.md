@@ -19,19 +19,18 @@ Transfer databases linked to the hosting account.
 Migrate email accounts associated with the hosting account.
 
 <h2>Known Issues:</h2>
-<li>Database Password Handling:</li>
-The script may encounter issues when attempting to set the same database password in HestiaCP due to differences in encryption mechanisms. Occasionally, a mismatch occurs when updating passwords to match those in the Plesk control panel.
 
-<li>Email Password Handling:</li>
-New passwords must be set because the existing ones in Plesk are encrypted using methods such as CRYPT, DIGEST-MD5, SCRAM-SHA-1, SCRAM-SHA-256, and APOP. These encryption methods make it impossible to retrieve the passwords directly from the Plesk control panel.
+**Plesk Password Handling:** Plesk has removed the option to extract the password from shared hosting subscriptions. Therefore, you will need to reset the password in HestiaCP, although the username will remain the same.
 
-<li>Addon Domains:</li>
-The script works reliably for domain names linked directly to Plesk subscriptions. However, addon domains that are not associated with a Plesk shared hosting subscription are handled differently: only the files are copied, without complete migration of other account elements. (If your domains are located outside of /home/$domain, you will need to update line 163 in the script.)
+**Database Password Handling:** The script may encounter issues when attempting to set the same database password in HestiaCP due to differences in encryption mechanisms. Occasionally, a mismatch occurs when updating passwords to match those in the Plesk control panel.
 
-<li>Subdomains:</li>
-The script works reliably for domain names linked directly to Plesk subscriptions. However, addon subdomains that are not associated with a Plesk shared hosting subscription are handled differently: only the files are copied, without complete migration of other account elements. (If your subdomains are located outside of /home/$domain, you will need to update line 163 in the script.)
+**Email Password Handling:** New passwords must be set because the existing ones in Plesk are encrypted using methods such as CRYPT, DIGEST-MD5, SCRAM-SHA-1, SCRAM-SHA-256, and APOP. These encryption methods make it impossible to retrieve the passwords directly from the Plesk control panel.
 
-# How to Use Our Script  
+**Addon Domains:** The script works reliably for domain names linked directly to Plesk subscriptions. However, addon domains that are not associated with a Plesk shared hosting subscription are handled differently: only the files are copied, without complete migration of other account elements. (If your domains are located outside of /home/$domain, you will need to update line 163 in the script.)
+
+**Subdomains:** The script works reliably for domain names linked directly to Plesk subscriptions. However, addon subdomains that are not associated with a Plesk shared hosting subscription are handled differently: only the files are copied, without complete migration of other account elements. (If your subdomains are located outside of /home/$domain, you will need to update line 163 in the script.)
+
+<h2>How to Use Our Script</h2>  
 
 Follow the steps below to successfully migrate accounts from Plesk to HestiaCP using our script:  
 
